@@ -1,0 +1,387 @@
+---
+title: "Stat98 Final Project"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+calc_rmse = function(predictions, values){
+  n = length(predictions)
+  se = rep(NA, n)
+  for (i in 1:n){
+    se[i]= (values[i] - unname(predictions[i]))^2
+  }
+  mse = mean(se)
+  rmse = sqrt(mse)
+  return(rmse)
+}
+
+```
+
+# CARMELO Models
+```{r, cache = TRUE}
+library(readr)
+library(rsample)
+library(tidyr)
+library(randomForest)
+library(mlbench)
+library(caret)
+nba_carmelo = (read.csv("CARMELO2019.csv"))
+nba_carmelo$scorediff = nba_carmelo$score1 - nba_carmelo$score2
+home_carmelo = nba_carmelo$carmelo1_pre
+away_carmelo = nba_carmelo$carmelo2_pre
+dataset = cbind(home_carmelo, away_carmelo, nba_carmelo$scorediff)
+dataset = as.data.frame(na.omit(dataset))
+
+set.seed(100)
+elo_split <- initial_split(dataset, prop = .8)
+elo_train <- training(elo_split)
+elo_test  <- testing(elo_split)
+
+
+#Carmelo Basic Regression
+carmelo_basic_fit = lm(V3~home_carmelo + away_carmelo, data=elo_train)
+basic_predict = predict(carmelo_basic_fit, elo_test)
+
+#Carmelo RF 
+RF.Model <- randomForest(V3~., data=elo_train, mtry=1, ntree = 1000, importance = TRUE)
+pred_randomForest <- predict(RF.Model, elo_test)
+
+
+#Carmelo 538 
+
+fivethirtyeight_calculation_function = function(X1, X2){
+  difference  = X1 - X2 
+  PS = (difference + 100)/28
+  return(PS)
+}
+
+five.Pred = fivethirtyeight_calculation_function(elo_test$home_carmelo, elo_test$away_carmelo)
+
+
+
+calc_rmse(basic_predict, elo_test$V3)
+calc_rmse(pred_randomForest, elo_test$V3)
+calc_rmse(five.Pred, elo_test$V3)
+```
+
+
+
+```{r}
+library(MASS)
+
+# Random Search
+control <- trainControl(method="repeatedcv", number=10, repeats=3, search="random")
+seed <- 98
+metric <- "RMSE"
+set.seed(seed)
+mtry <- sqrt(27)
+rf_random <- train(ScoreDiff_x~., data=team_train, method="rf", metric=metric, tuneLength=15, trControl=control)
+print(rf_random)
+
+
+```
+
+
+
+```{r}
+set.seed(92)
+library(deepnet)
+library(brnn)
+
+#ctrl <- trainControl(method="repeatedcv",repeats = 3)
+#dnnFit <- train(Y ~ ., data = elo_train, method = "brnn", trControl = ctrl, preProcess = c("center","scale"),tuneLength = 20)
+
+best_neurons = 1 
+BRNN.Model = brnn(Y ~ X11 + X22, data = elo_train, neurons = 100)
+BRNN.Pred = predict(BRNN.Model, elo_test)
+
+
+
+calc_rmse(BRNN.Pred, elo_test$Y)
+
+```
+
+
+```{r}
+current_elo = list(GSW = 1844, TOR = 1775, MIL = 1721, HOU = 1747, DEN = 1677, OKC = 1679, BOS = 1640, PHI = 1655, UTA = 1705, POR = 1575, ORL = 1542, DET = 1538, IND = 1545, BRK = 1481, SAS = 1544, LAC = 1496 )
+
+newdat = data.frame("X11"=1844, "X22"= 1496)
+
+#GSW Clippers
+predict(BRNN.Model, newdat)
+```
+
+
+
+
+# Team Models
+```{r, cache = TRUE}
+library(readr)
+library(neuralnet)
+library(DMwR)
+library(brnn)
+#export_dataframe <- read_csv("export_dataframe.csv")
+
+#DO SLOW AND FAST MOVING AVERAGES
+set.seed(98)
+team_split <- initial_split(export_dataframe, prop = .8)
+team_train <- training(team_split)
+team_test  <- testing(team_split)
+
+#Basic linear regression
+basic_team_fit = lm(ScoreDiff_x~., data = team_train)
+basic_team_predict = predict(basic_team_fit, team_test)
+
+#Stepwise by AIC 
+fit0 = lm(ScoreDiff_x~1, data = team_train)
+fitfull = lm(ScoreDiff_x~.^2, data = team_train)
+stepfit = step(fit0, scope = list(upper = fitfull), direction = "both", trace = FALSE)
+step_team_predict = predict(stepfit, team_test)
+
+#Random forest
+RF.Model <- randomForest(ScoreDiff_x~., data=team_train, mtry=5, ntree = 2000, importance = TRUE)
+pred_randomForest <- predict(RF.Model, team_test)
+calc_rmse(pred_randomForest, team_test$ScoreDiff_x)
+
+#mtry = 1, 13.20259
+
+
+
+#Neural Net 
+scaleddata = scale(export_dataframe)
+set.seed(98)
+team_split_scaled <- initial_split(scaleddata, prop = .8)
+team_train_scaled <- training(team_split_scaled)
+team_test_scaled  <- testing(team_split_scaled)
+nn<-neuralnet(ScoreDiff_x ~., data=team_train_scaled, hidden=c(4, 3, 2,1), linear.output=FALSE, threshold=0.01, stepmax = 1e+06)
+#pred_neural = predict(nn, team_test_scaled)
+plot(nn)
+
+#pred_neural = (pred_neural + mean(pred_neural)) / sd(pred_neural) 
+
+#BRNN
+BRNN.Model.Team = brnn(ScoreDiff_x ~., data = team_train, neurons = 4, epochs = 2000)
+BRNN.Pred.Team = predict(BRNN.Model.Team, team_test)
+calc_rmse(BRNN.Pred.Team, team_test$ScoreDiff_x)
+
+
+#1 = 13.074
+# 4 = 13.086
+
+calc_rmse(basic_team_predict, team_test$ScoreDiff_x)
+calc_rmse(step_team_predict, team_test$ScoreDiff_x)
+calc_rmse(pred_randomForest, team_test$ScoreDiff_x)
+calc_rmse(pred_neural, team_test$ScoreDiff_x)
+calc_rmse(BRNN.Pred.Team, team_test$ScoreDiff_x)
+```
+
+```{r, cache = TRUE}
+#Final models
+#export_dataframe_2 = read_csv("export_dataframe3.csv")
+carmelo_basic_fit = lm(V3~home_carmelo + away_carmelo, data=dataset)
+fit0 = lm(HomeMinusAway~1, data = export_dataframe_2)
+fitfull = lm(HomeMinusAway~.^2, data = export_dataframe_2)
+stepfit = step(fit0, scope = list(upper = fitfull), direction = "both", trace = FALSE)
+BRNN.Model.Team.1 = brnn(HomeMinusAway ~., data = export_dataframe_2, neurons = 1, epochs = 2000)
+BRNN.Model.Team.4 = brnn(HomeMinusAway ~., data = export_dataframe_2, neurons = 4, epochs = 2000)
+```
+
+
+
+```{r}
+
+brooklynla = export_dataframe_2[7281,]
+neworleanshouston = export_dataframe_2[7953,]
+knicksboston = export_dataframe_2[8683,]
+
+brooklynla_elo = data.frame("home_carmelo" = 1396.077954, "away_carmelo" = 1411.795384)
+pelicanshouston_elo = data.frame("home_carmelo" =1546.166023, "away_carmelo" =1787.28742)
+knicksboston_elo = data.frame("home_carmelo" =1420.978344, "away_carmelo" =1555.172519)
+
+predict(carmelo_basic_fit, brooklynla_elo )
+predict(carmelo_basic_fit, pelicanshouston_elo )
+predict(carmelo_basic_fit, knicksboston_elo )
+
+df = subset(brooklynla, select = -HomeMinusAway)
+df2 = subset(neworleanshouston, select = -HomeMinusAway)
+df3 = subset(knicksboston, select = -HomeMinusAway)
+
+predict(BRNN.Model.Team.1, new= df)
+predict(BRNN.Model.Team.4, new= df)
+predict(stepfit, new= df)
+
+predict(BRNN.Model.Team.1, new= df2)
+predict(BRNN.Model.Team.4, new= df2)
+predict(stepfit, new= df2)
+
+predict(BRNN.Model.Team.1, new= df3)
+predict(BRNN.Model.Team.4, new= df3)
+predict(stepfit, new= df3)
+
+
+
+stepvlas = c(-4.08, -4.20, -4.00)
+nnvals = c(-.5, -2.79, -2.40)
+basiccvals = c(1.72, -4.42, -1.76)
+correct = c(-3, -9, -6)
+
+calc_rmse(stepvlas, correct )
+calc_rmse(nnvals, correct)
+
+```
+
+
+
+```{r}
+#Playoffs
+avstatsplayoffs <- read_excel("avstatsplayoffs.xlsx")
+playoffplugin <- read_excel("playoffplugin.xlsx")
+library(readxl)
+PHIBRK = c("home_carmelo" = 1659.20579, "away_carmelo" =	1476.298443)
+TORORL = c("home_carmelo" = 1778.344437,	"away_carmelo" = 1538.647611)
+GSWLAC = c("home_carmelo" = 1844.140057,	"away_carmelo" =1496.018393)
+DENSAS = c("home_carmelo" = 1676.625588,	"away_carmelo" =1544.473206)
+BOSIND = c("home_carmelo" = 1640.479409,	"away_carmelo" =1545.290953)
+POROKC = c("home_carmelo" = 1575.35274,	 "away_carmelo" =1679.029505)
+MILDET = c("home_carmelo" = 1721.487039,	"away_carmelo" =1430.360214)
+HOUUTA = c("home_carmelo" = 1747.22539,	"away_carmelo" =1705.160419)
+
+
+testingdf = rbind(TORORL, GSWLAC, DENSAS, BOSIND,POROKC, MILDET, HOUUTA, PHIBRK)
+
+Mil_Det = playoffplugin[[1]]
+Tor_Orl = playoffplugin[[2]]
+Gsw_Lac = playoffplugin[[3]]
+Den_Sas = playoffplugin[[4]]
+Hou_Uta = playoffplugin[[5]]
+Por_Okc = playoffplugin[[6]]
+Phi_Brk = playoffplugin[[7]]
+Bos_Ind = playoffplugin[[8]]
+
+nn1preds = predict(BRNN.Model.Team.1, new= data.frame(playoffplugin))
+nn2preds = predict(BRNN.Model.Team.4, new= data.frame(playoffplugin))
+steppreds = predict(stepfit, new= data.frame(playoffplugin))
+basicpreds = predict(carmelo_basic_fit, data.frame(testingdf) )
+vegasround1 = c(13, 9.5, 13.5, 5.5, 6, 3.5, 8, 7 )
+
+correct = c(35, -3, 17, -5, 32, 5, -9 , 10)
+
+
+calc_rmse(nn1preds, correct)
+calc_rmse(nn2preds, correct)
+calc_rmse(steppreds, correct)
+calc_rmse(basicpreds, correct)
+calc_rmse(vegasround1, correct)
+```
+
+
+
+
+```{r}
+120 123 -3 LOSS 
+120 113  7 LOSS
+120 128  -8 LOSS
+120 110 10 WIN 
+
+
+
+vegas favors home by 9.5
+#Entire first round 
+calc_profit = function(betting_threshold, vegaslines, predictions, homeminusaway){
+  thresh = 1
+  starting_money = 1000
+  bet = 110
+  win = 100
+  Diff = predictions - vegaslines
+  countwin = 0
+  countloss = 0
+  for (i in 1:length(vegaslines)){
+    if (abs(Diff[i]) >= thresh){
+      if (homeminusaway[i] <= 0 ){
+        if (vegaslines[i] < homeminusaway[i]){
+          starting_money = starting_money -  bet
+          countloss = countloss + 1 
+        }
+        else if (vegaslines[i] > homeminusaway[i]){
+          starting_money = starting_money + bet
+          countwin = countwin + 1 
+        }
+      }
+      if (homeminusaway[i] >= 0 ){
+        if (vegaslines[i] > homeminusaway[i]){
+          starting_money  = starting_money - bet
+          countloss = countloss + 1 
+        }
+        else if (vegaslines[i] <= homeminusaway[i]){
+          starting_money = starting_money + bet
+          countwin = countwin + 1 
+        }
+      }
+
+    }
+  }
+  return(c(starting_money, countwin, countloss))
+}
+
+```
+
+
+
+```{r}
+vegasround1 = c(13, 9.5, 13.5, 5.5, 6, 3.5, 8, 7 )
+
+calc_profit(2, vegasround1, nn2preds, correct)
+
+
+```
+
+
+
+```{r}
+calc_profit = function(betting_threshold, vegaslines, predictions, homeminusaway){
+  thresh = betting_threshold
+  starting_money = 1000
+  bet = 110
+  win = 100
+  Diff = predictions - vegaslines
+  countwin = 0
+  countloss = 0
+  for (i in 1:length(vegaslines)){
+    if (abs(Diff[i]) >= thresh){
+      if (Diff[i] > 0){
+          if (vegaslines[i] > homeminusaway[i]){
+            starting_money  = starting_money - bet
+            countloss = countloss + 1 
+          }
+          else if (vegaslines[i] < homeminusaway[i]){
+            starting_money = starting_money + bet
+            countwin = countwin + 1 
+          }
+        
+      }
+      else if (Diff[i] < 0){
+          if (vegaslines[i] > homeminusaway[i]){
+            starting_money = starting_money + bet
+            countwin = countwin + 1 
+          }
+          else if (vegaslines[i] < homeminusaway[i]){
+            starting_money  = starting_money - bet
+            countloss = countloss + 1 
+          }
+      }
+
+    }
+  }
+  return(c(starting_money, countwin, countloss))
+}
+
+
+```
