@@ -1,0 +1,385 @@
+---
+title: "Stat98 Final Project"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Helper function to calculate RMSE 
+calc_rmse = function(predictions, values){
+  n = length(predictions)
+  se = rep(NA, n)
+  for (i in 1:n){
+    se[i]= (values[i] - unname(predictions[i]))^2
+  }
+  mse = mean(se)
+  rmse = sqrt(mse)
+  return(rmse)
+}
+
+```
+
+# CARMELO Models
+```{r, cache = TRUE}
+library(readr)
+library(rsample)
+library(tidyr)
+library(randomForest)
+library(mlbench)
+library(caret)
+
+#Load 2018-2019 CARMELO Data
+nba_carmelo = (read.csv("CARMELO2019.csv"))
+nba_carmelo$scorediff = nba_carmelo$score1 - nba_carmelo$score2
+home_carmelo = nba_carmelo$carmelo1_pre
+away_carmelo = nba_carmelo$carmelo2_pre
+dataset = cbind(home_carmelo, away_carmelo, nba_carmelo$scorediff)
+dataset = as.data.frame(na.omit(dataset))
+
+#Train/Test split 
+set.seed(100)
+elo_split <- initial_split(dataset, prop = .8)
+elo_train <- training(elo_split)
+elo_test  <- testing(elo_split)
+
+
+#Carmelo Basic Regression
+carmelo_basic_fit = lm(V3~home_carmelo + away_carmelo, data=elo_train)
+basic_predict = predict(carmelo_basic_fit, elo_test)
+
+#Carmelo RF 
+RF.Model_elo <- randomForest(V3~., data=elo_train, mtry=1, ntree = 1000, importance = TRUE)
+pred_randomForest_elo <- predict(RF.Model_elo, elo_test)
+
+
+#Carmelo 538 
+fivethirtyeight_calculation_function = function(X1, X2){
+  difference  = X1 - X2 
+  PS = (difference + 100)/28
+  return(PS)
+}
+
+five.Pred = fivethirtyeight_calculation_function(elo_test$home_carmelo, elo_test$away_carmelo)
+
+
+#RMSEs
+bprmse = calc_rmse(basic_predict, elo_test$V3)
+rfrmse = calc_rmse(pred_randomForest, elo_test$V3)
+frmse = calc_rmse(five.Pred, elo_test$V3)
+```
+
+
+
+
+
+
+# Team Models
+```{r, cache = TRUE}
+library(readr)
+library(neuralnet)
+library(DMwR)
+library(brnn)
+export_dataframe <- read_csv("export_dataframe.csv")
+
+#Fast moving average dataframe, from python coode
+set.seed(98)
+team_split <- initial_split(export_dataframe, prop = .8)
+team_train <- training(team_split)
+team_test  <- testing(team_split)
+
+#Basic linear regression
+basic_team_fit = lm(ScoreDiff_x~., data = team_train)
+basic_team_predict = predict(basic_team_fit, team_test)
+
+#Stepwise by AIC 
+fit0 = lm(ScoreDiff_x~1, data = team_train)
+fitfull = lm(ScoreDiff_x~.^2, data = team_train)
+stepfit = step(fit0, scope = list(upper = fitfull), direction = "forward", trace = FALSE)
+step_team_predict = predict(stepfit, team_test)
+
+#Random forest
+RF.Model <- randomForest(ScoreDiff_x~., data=team_train, mtry=5, ntree = 2000, importance = TRUE)
+pred_randomForest <- predict(RF.Model, team_test)
+calc_rmse(pred_randomForest, team_test$ScoreDiff_x)
+
+
+#### Archived Neural Net Work 
+#mtry = 1, 13.20259
+#tabledf = export_dataframe[c(1,3, 5, 9, 10, 11, 15, 17, 19, 23, 24, 25 )]
+#tabledf1 = export_dataframe[c(1,3, 5, 10, 11)]
+#tabledf2 = export_dataframe[c(15, 17, 19, 23, 24, 25 )]
+#Neural Net 
+#scaleddata = scale(export_dataframe)
+#set.seed(98)
+#team_split_scaled <- initial_split(scaleddata, prop = .8)
+#team_train_scaled <- training(team_split_scaled)
+#team_test_scaled  <- testing(team_split_scaled)
+#nn<-neuralnet(ScoreDiff_x ~., data=team_train_scaled, hidden=c(4, 3, 2,1), linear.output=FALSE, threshold=0.01, stepmax = 1e+06)
+#pred_neural = predict(nn, team_test_scaled)
+#plot(nn)
+#pred_neural = (pred_neural + mean(pred_neural)) / sd(pred_neural) 
+
+#BRNN
+BRNN.Model.Team = brnn(ScoreDiff_x ~., data = team_train, neurons = 4, epochs = 2000)
+BRNN.Pred.Team = predict(BRNN.Model.Team, team_test)
+
+
+#RMSE Calculations
+rmse1 = calc_rmse(basic_team_predict, team_test$ScoreDiff_x)
+rmse2 = calc_rmse(step_team_predict, team_test$ScoreDiff_x)
+rmse3 = calc_rmse(pred_randomForest, team_test$ScoreDiff_x)
+rmse4 = calc_rmse(pred_neural, team_test$ScoreDiff_x)
+rmse5 = calc_rmse(BRNN.Pred.Team, team_test$ScoreDiff_x)
+
+```
+
+
+# Fitted vs Actual plots
+```{r}
+
+par(mfrow=c(3,2)) 
+
+plot(basic_predict, elo_test$V3, xlab = "Fitted", ylab = "Actual", main = "Dataset 1: LSR", ylim = c(-40, 40), xlim = c(-20,20))
+plot(pred_randomForest_elo, elo_test$V3, xlab = "Fitted", ylab = "Actual", main = "Dataset 1: RF", ylim = c(-40, 40),xlim = c(-20,20))
+plot(five.Pred, elo_test$V3, xlab = "Fitted", ylab = "Actual", main = "Dataset1: 538 Difference", ylim = c(-40, 40),xlim = c(-20,20))
+plot(step_team_predict, team_test$ScoreDiff_x, xlab = "Fitted", ylab = "Actual", main = "Dataset 2: Stepwise", ylim = c(-40, 40),xlim = c(-20,20))
+plot(BRNN.Pred.Team, team_test$ScoreDiff_x, xlab = "Fitted", ylab = "Actual", main = "Dataset 2: Neural Net", ylim = c(-40, 40),xlim = c(-20,20))
+plot(pred_randomForest, team_test$ScoreDiff_x, xlab = "Fitted", ylab = "Actual", main = "Dataset 2: Random Forest", ylim = c(-40, 40),xlim = c(-20,20))
+```
+
+
+# Final Models
+```{r, cache = TRUE}
+#Final models
+export_dataframe_2 = read_csv("export_dataframe3.csv")
+carmelo_basic_fit = lm(V3~home_carmelo + away_carmelo, data=dataset)
+fit0 = lm(HomeMinusAway~1, data = export_dataframe_2)
+fitfull = lm(HomeMinusAway~.^2, data = export_dataframe_2)
+stepfit = step(fit0, scope = list(upper = fitfull), direction = "both", trace = FALSE)
+BRNN.Model.Team.1 = brnn(HomeMinusAway ~., data = export_dataframe_2, neurons = 1, epochs = 2000)
+BRNN.Model.Team.4 = brnn(HomeMinusAway ~., data = export_dataframe_2, neurons = 4, epochs = 2000)
+```
+
+
+#Visualization examples for presentation
+```{r}
+
+#Visualiztion examples for presentation
+
+brooklynla = export_dataframe_2[7281,]
+neworleanshouston = export_dataframe_2[7953,]
+knicksboston = export_dataframe_2[8683,]
+
+brooklynla_elo = data.frame("home_carmelo" = 1396.077954, "away_carmelo" = 1411.795384)
+pelicanshouston_elo = data.frame("home_carmelo" =1546.166023, "away_carmelo" =1787.28742)
+knicksboston_elo = data.frame("home_carmelo" =1420.978344, "away_carmelo" =1555.172519)
+
+p1 = predict(carmelo_basic_fit, brooklynla_elo )
+p2 = predict(carmelo_basic_fit, pelicanshouston_elo )
+p3 = predict(carmelo_basic_fit, knicksboston_elo )
+
+df = subset(brooklynla, select = -HomeMinusAway)
+df2 = subset(neworleanshouston, select = -HomeMinusAway)
+df3 = subset(knicksboston, select = -HomeMinusAway)
+
+p11 = predict(BRNN.Model.Team.1, new= df)
+p12= predict(BRNN.Model.Team.4, new= df)
+p13 = predict(stepfit, new= df)
+
+p22 = predict(BRNN.Model.Team.1, new= df2)
+p23= predict(BRNN.Model.Team.4, new= df2)
+p21 = predict(stepfit, new= df2)
+
+p31 = predict(BRNN.Model.Team.1, new= df3)
+p32 = predict(BRNN.Model.Team.4, new= df3)
+p33 = predict(stepfit, new= df3)
+
+
+
+stepvlas = c(-4.08, -4.20, -4.00)
+nnvals = c(-.5, -2.79, -2.40)
+basiccvals = c(1.72, -4.42, -1.76)
+correct = c(-3, -9, -6)
+
+#RMSE calculation
+rmsep1 = calc_rmse(stepvlas, correct )
+rmsep2 = calc_rmse(nnvals, correct)
+
+```
+
+
+# Playoff Round 1 Game 1 2019 examples
+```{r}
+#Playoffs Round 1 
+avstatsplayoffs <- read_excel("avstatsplayoffs.xlsx")
+playoffplugin <- read_excel("playoffplugin.xlsx")
+library(readxl)
+PHIBRK = c("home_carmelo" = 1659.20579, "away_carmelo" =	1476.298443)
+TORORL = c("home_carmelo" = 1778.344437,	"away_carmelo" = 1538.647611)
+GSWLAC = c("home_carmelo" = 1844.140057,	"away_carmelo" =1496.018393)
+DENSAS = c("home_carmelo" = 1676.625588,	"away_carmelo" =1544.473206)
+BOSIND = c("home_carmelo" = 1640.479409,	"away_carmelo" =1545.290953)
+POROKC = c("home_carmelo" = 1575.35274,	 "away_carmelo" =1679.029505)
+MILDET = c("home_carmelo" = 1721.487039,	"away_carmelo" =1430.360214)
+HOUUTA = c("home_carmelo" = 1747.22539,	"away_carmelo" =1705.160419)
+
+
+testingdf = rbind(TORORL, GSWLAC, DENSAS, BOSIND,POROKC, MILDET, HOUUTA, PHIBRK)
+
+Mil_Det = playoffplugin[[1]]
+Tor_Orl = playoffplugin[[2]]
+Gsw_Lac = playoffplugin[[3]]
+Den_Sas = playoffplugin[[4]]
+Hou_Uta = playoffplugin[[5]]
+Por_Okc = playoffplugin[[6]]
+Phi_Brk = playoffplugin[[7]]
+Bos_Ind = playoffplugin[[8]]
+
+#Predictions playoffs round 1 
+nn1preds = predict(BRNN.Model.Team.1, new= data.frame(playoffplugin))
+nn2preds = predict(BRNN.Model.Team.4, new= data.frame(playoffplugin))
+steppreds = predict(stepfit, new= data.frame(playoffplugin))
+basicpreds = predict(carmelo_basic_fit, data.frame(testingdf) )
+vegasround1 = c(13, 9.5, 13.5, 5.5, 6, 3.5, 8, 7 )
+
+correct = c(35, -3, 17, -5, 32, 5, -9 , 10)
+
+
+#RMSE playoffs round 1
+calc_rmse(nn1preds, correct)
+calc_rmse(nn2preds, correct)
+calc_rmse(steppreds, correct)
+calc_rmse(basicpreds, correct)
+calc_rmse(vegasround1, correct)
+```
+
+
+
+# Round 1 Betting 
+
+```{r}
+# Round 1 visualization 
+vegasround1 = c(13, 9.5, 13.5, 5.5, 6, 3.5, 8, 7 )
+
+gamenames = c("Mil/Det", "Tor/Orl", "Gsw/Lac", "Den/Sas", "Hou/Uta", "Por/Okc", "Phi/Brk", "Bos/Ind")
+result_thres_1 = c("Loss", "Win", "No Bet", "Win", "No Bet", "Win", "Win", "Win" )
+our_model = nn2preds 
+vegas_model = vegasround1 
+betlist = c("Det +13", "Orl +9", "No Bet", "Sas +5.5", "No Bet", "POR +3.5", "BRK +8", "BOS -10")
+df = data.frame(gamenames, our_model, vegasround1, betlist, correct, result_thres_1)
+```
+
+
+# Profit Calculations 
+
+```{r}
+# Profit Calculation Function
+calc_profit = function(betting_threshold, vegaslines, predictions, homeminusaway){
+  thresh = betting_threshold
+  bet = 110
+  win = 100
+  Diff = predictions - vegaslines
+  countwin = 0
+  countloss = 0
+  for (i in 1:length(vegaslines)){
+    if (abs(Diff[i]) >= thresh){
+      
+   
+      if (homeminusaway[i] < vegaslines[i] & predictions[i] < vegaslines[i]){
+       
+        countwin = countwin + 1 
+      }
+      else if (homeminusaway[i] > vegaslines[i] & predictions[i] > vegaslines[i]){
+            
+     
+        countwin = countwin + 1 
+      }
+    
+      else {
+   
+        countloss = countloss + 1 
+      }
+        
+
+    }
+  }
+  ending_money = 0 + 100*countwin - 110 * countloss
+  return(c(ending_money, countwin, countloss))
+}
+
+```
+
+
+
+```{r}
+playoffplugin2 <- read_excel("onenightplugin.xlsx")
+nn2predstn = predict(BRNN.Model.Team.4, new= data.frame(playoffplugin2))
+```
+
+
+# Profit Testing on 30 random games
+```{r}
+
+#n = nrow(team_test)
+#sampletest = sample(1:n, size = 50)
+
+#Randomly sampled row indices
+samplerows = c(1142, 1159, 1296, 1091,  444, 1561,  213, 1404, 1269,  785,  346, 1671,  781, 1528,  671,  932, 1191, 1308, 1535, 1360,  532, 1205, 748,  706, 1841,  217, 1176,   69, 1064,   90)
+
+#Corresponding data
+profit_testing_data = team_test[samplerows,]
+profit_test_data = profit_testing_data[-14]
+profit_test_results = profit_testing_data$ScoreDiff_x
+c1 = profit_test_data$FieldGoals_x
+c2 = profit_test_data$FieldGoalsAttempted_x
+c3 = profit_test_data$X3PointShots_x
+c4 =profit_test_data$X3PointShotsAttempted_x
+
+# Get the corresponding row in the export dataframe, so that the date/teams can be seen for vegas line lookup
+bettingind = rep(NA, 30)
+for (i in 1:30){
+  bettingind[i] = which(export_dataframe$FieldGoals_x == c1[i] & 
+        export_dataframe$FieldGoalsAttempted_x == c2[i] &
+        export_dataframe$X3PointShots_x == c3[i] & 
+         export_dataframe$X3PointShotsAttempted_x == c4[i] )
+  
+}
+
+
+vegas_lines = c(-6, 14.5,4,-10.5,4,-10.5, 7, 5, 8, -6, 9.5, 3, -3, -4.5, -2.5, 9.5, 4.5, 5, 1.5, -8, -8.5, 3.5, 5, 5, 0, -1, 10, 3, 1, -12.5)
+
+#vegas_testing = vegas_test[1:30,]
+#vegas_testing_x = vegas_testing[-14]
+#vegas_testing_y = vegas_testing$ScoreDiff_x
+
+# Predictions
+nn1predstn = predict(BRNN.Model.Team.1, new= data.frame(profit_test_data))
+nn24predstn = predict(BRNN.Model.Team.4, new= data.frame(profit_test_data))
+steppreds = predict(stepfit, new= data.frame(profit_test_data))
+
+# Profit calculations
+calc_profit(1, vegas_lines, steppreds, profit_test_results )
+calc_profit(1, vegas_lines, nn24predstn, profit_test_results )
+calc_profit(2, vegas_lines, steppreds, profit_test_results )
+calc_profit(2, vegas_lines, nn24predstn, profit_test_results )
+calc_profit(3, vegas_lines, steppreds, profit_test_results )
+calc_profit(3, vegas_lines, nn24predstn, profit_test_results )
+calc_profit(4, vegas_lines, steppreds, profit_test_results )
+calc_profit(4, vegas_lines, nn24predstn, profit_test_results )
+calc_profit(5, vegas_lines, steppreds, profit_test_results )
+calc_profit(5, vegas_lines, nn24predstn, profit_test_results )
+
+
+# Visualization
+comparetable = cbind(steppreds, nn24predstn, vegas_lines, profit_test_results)
+colnames(comparetable)<-(c("StepwiseLSR", "NeuralNet", "Vegas", "Actual"))
+
+
+```
